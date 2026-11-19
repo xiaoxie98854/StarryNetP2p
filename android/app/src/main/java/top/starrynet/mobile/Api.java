@@ -32,7 +32,8 @@ final class Api {
 
     /** 带凭据的接口：永远只走 https，跳过任何明文地址。 */
     private static final Set<String> SECURE_ONLY = new HashSet<>(Arrays.asList(
-            "/login", "/reg", "/me", "/redeem", "/claim", "/flow", "/signin"));
+            "/login", "/reg", "/me", "/redeem", "/claim", "/flow", "/signin",
+            "/create", "/close", "/hb"));
 
     private volatile int active = 0;
 
@@ -96,12 +97,39 @@ final class Api {
 
     Result notices(long since) { return get("/notices?since=" + since + "&n=10"); }
 
+    /**
+     * 开房。返回 OK|房间码|线路域名|转发端口|P2P密钥|线路IP|房主凭证|房间frpToken|共享frpToken
+     * 与桌面端 ApiClient.create 完全同一个接口、同一段顺序。
+     */
+    Result create(String name, int localPort, String node, String token, boolean pub) {
+        return get("/create?name=" + enc(name) + "&port=" + localPort
+                + "&node=" + enc(node) + "&token=" + enc(token) + (pub ? "&public=1" : ""));
+    }
+
+    /** 房主关房。key 是建房返回第 6 段（房主凭证），只有房主有。 */
+    Result close(String code, String key) {
+        return get("/close?code=" + enc(code) + "&key=" + enc(key));
+    }
+
+    /** 房主心跳：续房间有效期。服务端要求 POST，凭 ownerKey 证明续命的是房主本人。 */
+    Result heartbeat(String code, String key) {
+        return request("/hb?code=" + enc(code) + "&key=" + enc(key), "POST");
+    }
+
     /** 买卡地址：服务端建单后 302 到爱发电，App 只负责用浏览器打开。 */
     String buyUrl(int days) {
         return BASES[0] + "/buy?plan=" + days;
     }
 
     private Result get(String path) {
+        return request(path, "GET");
+    }
+
+    /**
+     * 统一的请求流程：https 优先、失败按序切换备用地址、敏感接口绝不降级明文。
+     * POST 只用于心跳（服务端要求），不带请求体。
+     */
+    private Result request(String path, String method) {
         int qm = path.indexOf('?');
         String bare = qm >= 0 ? path.substring(0, qm) : path;
         boolean secureOnly = SECURE_ONLY.contains(bare);
@@ -118,7 +146,11 @@ final class Api {
                 conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setConnectTimeout(8000);
                 conn.setReadTimeout(12000);
-                conn.setRequestMethod("GET");
+                conn.setRequestMethod(method);
+                if ("POST".equals(method)) {
+                    conn.setDoOutput(true);
+                    conn.setFixedLengthStreamingMode(0);
+                }
                 conn.setInstanceFollowRedirects(true);
                 int code = conn.getResponseCode();
                 InputStream in = code >= 400 ? conn.getErrorStream() : conn.getInputStream();

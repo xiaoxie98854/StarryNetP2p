@@ -3,9 +3,20 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 开房期间用前台服务保住隧道进程，避免退到后台就被系统回收 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!--
+        extractNativeLibs 必须为 true：隧道程序以 jniLibs/arm64-v8a/libfrpc.so 打进 APK，
+        只有解压到 /data/app/.../lib/arm64/ 之后才具备可执行权限（Android 10+ 禁止从
+        应用数据目录执行文件）。关掉它会让开房直接报「隧道程序不可执行」。
+    -->
     <application
         android:allowBackup="true"
+        android:extractNativeLibs="true"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_launcher"
@@ -22,6 +33,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".TunnelService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="maintain_p2p_tunnel_for_minecraft" />
+        </service>
     </application>
 
 </manifest>

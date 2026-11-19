@@ -18,10 +18,10 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 /**
- * StarryNet 手机版 —— 四个大标签：账号 / 大厅 / 加入 / 我的。
+ * StarryNet 手机版 —— 五个大标签：账号 / 大厅 / 开房 / 加入 / 我的。
  *
- * 手机端定位：加入别人的房间、签到领流量、买卡兑换、看公告。
- * 开房需要后台常驻跑隧道进程，手机系统限制太多，仍由电脑客户端负责。
+ * 手机端功能齐全：能加入别人的房间，也能自己开房（把手机上 MC 的端口经 frp 隧道
+ * 映射到公网，隧道由内置的 libfrpc.so 子进程承担，靠前台服务保活）。
  *
  * 所有控件按拇指操作设计：主按钮 52dp、标签 62dp、输入框 48dp，
  * 字号不小于 14sp，整页可滚动，小屏也不会有按不到的按钮。
@@ -51,6 +51,17 @@ public class MainActivity extends Activity {
     // 加入页
     private EditText codeField, joinNameField;
     private TextView joinResult, copyBtn, joinHint;
+
+    // 开房页
+    private EditText hostPortField;
+    private TextView hostNodeRow, hostRoomCode, hostAddr, hostStatus;
+    private Button hostBtn;
+    private LinearLayout hostResultBox;
+    /** /nodes 拉回来的线路 key 与显示名，默认选第一条。 */
+    private final java.util.List<String> nodeKeys = new java.util.ArrayList<>();
+    private final java.util.List<String> nodeNames = new java.util.ArrayList<>();
+    private int nodeIdx = 0;
+    private boolean nodesLoaded = false;
 
     // 我的页
     private EditText redeemField, claimField;
@@ -95,9 +106,9 @@ public class MainActivity extends Activity {
         nav.setOrientation(LinearLayout.HORIZONTAL);
         nav.setBackgroundColor(Ui.color(this, R.color.card));
         nav.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
-        String[] names = {"账号", "大厅", "加入", "我的"};
-        tabs = new Button[4];
-        for (int i = 0; i < 4; i++) {
+        String[] names = {"账号", "大厅", "开房", "加入", "我的"};
+        tabs = new Button[5];
+        for (int i = 0; i < 5; i++) {
             final int idx = i;
             Button t = new Button(this);
             t.setText(names[i]);
@@ -106,6 +117,7 @@ public class MainActivity extends Activity {
             t.setAllCaps(false);
             t.setBackground(null);
             t.setMinHeight(Ui.dp(this, 62));
+            t.setPadding(0, 0, 0, 0);
             t.setTextColor(Ui.color(this, R.color.muted));
             t.setOnClickListener(v -> switchTab(idx));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
@@ -119,10 +131,11 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        // ---------- 构建四个页面 ----------
+        // ---------- 构建五个页面 ----------
         pages = new View[]{
                 buildAccountPage(),
                 buildLobbyPage(),
+                buildHostPage(),
                 buildJoinPage(),
                 buildMinePage()
         };
@@ -131,6 +144,9 @@ public class MainActivity extends Activity {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }
         switchTab(0);
+
+        // 隧道状态回调（进程被系统杀掉、房间在服务端失效时会用到）
+        attachTunnel();
 
         // 启动后：校验令牌 + 拉公告（都不阻塞界面）
         if (prefs.logged()) {
@@ -321,7 +337,7 @@ public class MainActivity extends Activity {
         roomsBox = Ui.vertical(this);
         page.addView(roomsBox);
 
-        TextView tip = Ui.text(this, "公开房由房主在电脑客户端开启。想让别人加入你的世界，请用电脑客户端开房。",
+        TextView tip = Ui.text(this, "没有想进的房间？到「开房」页就能自己开一间，开好后把房间码发给朋友。",
                 13, Ui.color(this, R.color.dim));
         tip.setPadding(0, Ui.dp(this, 12), 0, 0);
         page.addView(tip);
@@ -363,12 +379,270 @@ public class MainActivity extends Activity {
                 final String roomName = f[1];
                 join.setOnClickListener(v -> {
                     codeField.setText(code);
-                    switchTab(2);
+                    switchTab(3);
                     toast("已填入「" + roomName + "」的房间码，点连接即可");
                 });
                 roomsBox.addView(card);
             }
         });
+    }
+
+    // ==================== 开房页 ====================
+
+    /**
+     * 手机开房：把本机端口经 frp 映射到公网。
+     *
+     * 与电脑端同一套流程：/create 申请房间 → 起 frpc 隧道 → 20 秒心跳续期。
+     * 差别只在隧道程序换成了 APK 内置的 libfrpc.so，并且用前台服务保活。
+     */
+    private View buildHostPage() {
+        LinearLayout page = Ui.vertical(this);
+        page.setPadding(Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 24));
+
+        LinearLayout card = Ui.card(this);
+        card.addView(Ui.bold(this, "开一间房", 17, Ui.color(this, R.color.text)));
+        card.addView(Ui.spacer(this, 12));
+
+        card.addView(Ui.caption(this, "要开放的端口"));
+        hostPortField = Ui.field(this, "25565", false);
+        hostPortField.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        hostPortField.setText("25565");
+        card.addView(hostPortField);
+
+        TextView portTip = Ui.text(this,
+                "游戏里点「对局域网开放」后，聊天栏会显示「本地游戏已在端口 XXXXX 上开放」，"
+                        + "把那个数字填到这里。开正式服务端的话就是 server.properties 里的端口。",
+                12, Ui.color(this, R.color.dim));
+        portTip.setPadding(0, 0, 0, Ui.dp(this, 16));
+        card.addView(portTip);
+
+        card.addView(Ui.caption(this, "线路（点击切换）"));
+        hostNodeRow = Ui.text(this, "正在加载线路…", 16, Ui.color(this, R.color.text));
+        hostNodeRow.setMinHeight(Ui.dp(this, 52));
+        hostNodeRow.setGravity(Gravity.CENTER_VERTICAL);
+        hostNodeRow.setPadding(Ui.dp(this, 14), Ui.dp(this, 10), Ui.dp(this, 14), Ui.dp(this, 10));
+        android.graphics.drawable.GradientDrawable nd =
+                new android.graphics.drawable.GradientDrawable();
+        nd.setColor(Ui.color(this, R.color.field_bg));
+        nd.setCornerRadius(Ui.dp(this, 6));
+        nd.setStroke(1, Ui.color(this, R.color.line));
+        hostNodeRow.setBackground(nd);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp.setMargins(0, 0, 0, Ui.dp(this, 14));
+        hostNodeRow.setLayoutParams(nlp);
+        hostNodeRow.setOnClickListener(v -> pickNode());
+        card.addView(hostNodeRow);
+
+        hostBtn = Ui.button(this, "开房", Ui.color(this, R.color.gold), Ui.color(this, R.color.bg));
+        card.addView(hostBtn);
+        page.addView(card);
+
+        hostStatus = Ui.text(this,
+                "开房需要登录账号。开好之后退到后台也不会断，通知栏会常驻显示房间状态。",
+                13, Ui.color(this, R.color.dim));
+        hostStatus.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 14));
+        page.addView(hostStatus);
+
+        hostResultBox = Ui.card(this);
+        hostResultBox.addView(Ui.caption(this, "房间码（发给朋友）"));
+        hostRoomCode = Ui.bold(this, "—", 28, Ui.color(this, R.color.green));
+        hostRoomCode.setLetterSpacing(0.08f);
+        hostResultBox.addView(hostRoomCode);
+        hostResultBox.addView(Ui.spacer(this, 14));
+
+        hostResultBox.addView(Ui.caption(this, "朋友连接地址"));
+        hostAddr = Ui.text(this, "—", 16, Ui.color(this, R.color.text));
+        hostAddr.setTextIsSelectable(true);
+        hostResultBox.addView(hostAddr);
+        hostResultBox.addView(Ui.spacer(this, 14));
+
+        Button copyHostAddr = Ui.outlineButton(this, "复制地址发给朋友",
+                Ui.color(this, R.color.green));
+        copyHostAddr.setOnClickListener(v -> {
+            String a = hostAddr.getText().toString();
+            if (a.isEmpty() || "—".equals(a)) {
+                toast("还没有地址");
+                return;
+            }
+            copyText(a);
+        });
+        hostResultBox.addView(copyHostAddr);
+        hostResultBox.addView(Ui.spacer(this, 10));
+
+        Button closeRoomBtn = Ui.outlineButton(this, "关闭房间", Ui.color(this, R.color.red));
+        closeRoomBtn.setOnClickListener(v -> doCloseRoom());
+        hostResultBox.addView(closeRoomBtn);
+
+        hostResultBox.setVisibility(View.GONE);
+        page.addView(hostResultBox);
+
+        hostBtn.setOnClickListener(v -> doHost());
+
+        return Ui.page(this, page);
+    }
+
+    /**
+     * 把隧道状态回调挂到界面上。放在 onCreate 里注册而不是 doHost 里，
+     * 这样从后台回来、Activity 重建之后，隧道断开仍然能第一时间反映到界面。
+     */
+    private void attachTunnel() {
+        Tunnel.get(this).setListener(new Tunnel.Listener() {
+            @Override
+            public void onTunnelDead(String reason) {
+                if (hostStatus == null) return;
+                hostStatus.setText("隧道已断开：" + reason + "　请重新开房。");
+                if (hostResultBox != null) hostResultBox.setVisibility(View.GONE);
+                if (hostBtn != null) {
+                    hostBtn.setText("开房");
+                    hostBtn.setEnabled(true);
+                }
+                TunnelService.end(MainActivity.this);
+            }
+
+            @Override
+            public void onRoomLost(String reason) {
+                if (hostStatus == null) return;
+                hostStatus.setText(reason + "。已经在玩的朋友不受影响，但新朋友凭房号加不进来。");
+            }
+        });
+    }
+
+    private void loadNodes() {
+        async(() -> api.nodes(), r -> {
+            if (!r.ok) {
+                hostNodeRow.setText("线路加载失败，点这里重试");
+                return;
+            }
+            nodeKeys.clear();
+            nodeNames.clear();
+            // OK|key~名称~档位~域名|...
+            for (int i = 1; i < r.parts.length; i++) {
+                String[] f = r.part(i).split("~", -1);
+                if (f.length < 2 || f[0].trim().isEmpty()) continue;
+                nodeKeys.add(f[0].trim());
+                nodeNames.add(f[1].trim());
+            }
+            if (nodeKeys.isEmpty()) {
+                hostNodeRow.setText("没有可用线路，点这里重试");
+                return;
+            }
+            nodesLoaded = true;
+            if (nodeIdx >= nodeKeys.size()) nodeIdx = 0;
+            hostNodeRow.setText(nodeNames.get(nodeIdx) + "  ▾");
+        });
+    }
+
+    private void pickNode() {
+        if (!nodesLoaded) {
+            loadNodes();
+            return;
+        }
+        if (nodeNames.size() <= 1) {
+            toast("当前只有一条线路");
+            return;
+        }
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("选择线路")
+                .setSingleChoiceItems(nodeNames.toArray(new String[0]), nodeIdx, (d, which) -> {
+                    nodeIdx = which;
+                    hostNodeRow.setText(nodeNames.get(nodeIdx) + "  ▾");
+                    d.dismiss();
+                })
+                .show();
+    }
+
+    private void doHost() {
+        if (!prefs.logged()) {
+            toast("开房需要先登录账号");
+            switchTab(0);
+            return;
+        }
+        final Tunnel t = Tunnel.get(this);
+        if (t.isRunning()) {
+            toast("已经有房间开着了，先关掉再开");
+            return;
+        }
+        final int port = parseInt(hostPortField.getText().toString().trim());
+        if (port <= 0 || port > 65535) {
+            toast("端口要填 1-65535 的数字");
+            return;
+        }
+        if (!nodesLoaded || nodeKeys.isEmpty()) {
+            toast("线路还没加载好，稍等一下");
+            loadNodes();
+            return;
+        }
+
+        final String node = nodeKeys.get(Math.min(nodeIdx, nodeKeys.size() - 1));
+        final String nick = prefs.name() == null || prefs.name().isEmpty() ? "玩家" : prefs.name();
+
+        hostBtn.setEnabled(false);
+        hostBtn.setText("正在开房…");
+        hostStatus.setText("正在申请房间并启动隧道，大约需要几秒…");
+
+        async(() -> {
+            boolean ok = t.start(nick, port, node, prefs.token(), false);
+            if (ok) {
+                return new Api.Result(true, new String[]{t.roomCode(), t.relayAddr()}, "OK");
+            }
+            return new Api.Result(false, new String[0], "ERR|" + t.lastError());
+        }, r -> {
+            if (!r.ok) {
+                hostBtn.setEnabled(true);
+                hostBtn.setText("开房");
+                hostStatus.setText("开房失败：" + r.error());
+                toast("开房失败：" + r.error());
+                return;
+            }
+            // 隧道起来了才需要保活；顺序不能反，否则服务会立刻判定「没在跑」自行退出
+            TunnelService.begin(MainActivity.this);
+            refreshHostUi();
+            hostStatus.setText("隧道已建立，可以退到后台。通知栏会显示房间状态。");
+            toast("开房成功，房间码 " + r.part(0));
+        });
+    }
+
+    private void doCloseRoom() {
+        Tunnel t = Tunnel.get(this);
+        if (!t.isRunning() && t.roomCode().isEmpty()) {
+            toast("当前没有开着的房间");
+            hostResultBox.setVisibility(View.GONE);
+            return;
+        }
+        t.stopAndClose();
+        TunnelService.end(this);
+        hostResultBox.setVisibility(View.GONE);
+        hostStatus.setText("房间已关闭，朋友将无法再连入。");
+        hostBtn.setText("开房");
+        hostBtn.setEnabled(true);
+        toast("已关房");
+    }
+
+    /** 把 Tunnel 的真实状态同步到界面：切回本页、从后台回来都要调。 */
+    private void refreshHostUi() {
+        Tunnel t = Tunnel.get(this);
+        if (t.isRunning()) {
+            hostResultBox.setVisibility(View.VISIBLE);
+            hostRoomCode.setText(t.roomCode());
+            hostAddr.setText(t.relayAddr());
+            hostStatus.setText("隧道运行中。退出这个界面也不会断，可随时回来关房。");
+            hostBtn.setText("正在开房");
+            hostBtn.setEnabled(false);
+        } else {
+            if (hostResultBox != null) hostResultBox.setVisibility(View.GONE);
+            if (hostBtn != null) {
+                hostBtn.setText("开房");
+                hostBtn.setEnabled(true);
+            }
+        }
+    }
+
+    private void copyText(String s) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm == null) return;
+        cm.setPrimaryClip(ClipData.newPlainText("StarryNet", s));
+        toast("已复制：" + s);
     }
 
     // ==================== 加入页 ====================
@@ -609,7 +883,31 @@ public class MainActivity extends Activity {
             pages[i].setVisibility(i == idx ? View.VISIBLE : View.GONE);
             tabs[i].setTextColor(Ui.color(this, i == idx ? R.color.green : R.color.muted));
         }
-        if (idx == 1) refreshRooms();
+        if (idx == 1) {
+            refreshRooms();
+        }
+        if (idx == 2) {
+            // 线路表只在第一次进页面时拉一次；房间状态每次都跟 Tunnel 单例对齐，
+            // 否则从别的标签切回来会看到过期信息
+            if (!nodesLoaded) loadNodes();
+            refreshHostUi();
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从后台回来时隧道可能已经被系统掐了，界面要跟着变
+        if (pages != null && currentTab == 2) {
+            refreshHostUi();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        // 隧道本身由前台服务托着，Activity 销毁不该停它；只解掉回调避免泄漏
+        Tunnel.get(this).setListener(null);
+        super.onDestroy();
     }
 
     private boolean needLogin() {

@@ -38,6 +38,19 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    // 隧道程序 libfrpc.so 必须真正解压到 nativeLibraryDir 才能执行（详见 AndroidManifest 注释）
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+            // 别让 AGP 用 NDK 的 strip 处理它：这是 Go 编译出来的完整可执行文件，
+            // 不是共享库，被 strip 会直接损坏
+            keepDebugSymbols.add("**/libfrpc.so")
+        }
+    }
+
+    // APK 里带 ~20MB 的 frpc，压缩后仍然偏大，但这是开房功能的前提。
+    // 关掉 aapt 对 so 的压缩优化会让体积更大，所以保持默认压缩。
 }
 
 // 零第三方依赖：网络用 HttpURLConnection，UI 用系统控件。
