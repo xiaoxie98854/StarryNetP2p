@@ -26,12 +26,13 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      # AGP 在 assembleRelease 时会自动 zipalign（对齐已验证正常）并按
-      # signingConfig 签名。v1/v2/v3 全开以兼容新旧国产 ROM。
-      - name: Build signed release APK
+      - name: Build unsigned release APK
         run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Verify APK
+      # 国产 ROM（荣耀 MagicOS 等）对纯 v2/v3 或 v1 签名无效的 APK 会报
+      # 「系统内部问题导致安装失败」。这里用 apksigner 显式做 v1+v2 签名，
+      # 保证 META-INF/CERT.RSA 真实有效，且 apksigner 会自动保持对齐。
+      - name: Sign (v1+v2) + Verify
         id: apk
         run: |
           set -euo pipefail
@@ -40,11 +41,42 @@ jobs:
           if [ ! -x "$BT/apksigner" ]; then
             BT=$(find "$SDK/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
           fi
-          APK=app/build/outputs/apk/release/app-release.apk
           echo "build-tools: $BT"
-          echo "apk: $APK"
-          "$BT/apksigner" verify --verbose --print-certs "$APK"
-          echo "path=android/$APK" >> "$GITHUB_OUTPUT"
+          UN=$(find app/build/outputs/apk/release -name '*-unsigned.apk' | head -1)
+          OUT=app/build/outputs/apk/release/app-release.apk
+          echo "unsigned: $UN"
+
+          "$BT/apksigner" sign \
+            --ks app/starrynet-release.jks \
+            --ks-pass pass:starrynet123 \
+            --key-pass pass:starrynet123 \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            --v4-signing-enabled false \
+            --min-sdk-version 24 \
+            --out "$OUT" "$UN"
+
+          echo "== verify =="
+          "$BT/apksigner" verify --verbose --print-certs "$OUT"
+
+          echo "== alignment (local header view) =="
+          python3 - "$OUT" <<'PY'
+          import sys, struct, zipfile
+          p=sys.argv[1]
+          raw=open(p,'rb').read()
+          z=zipfile.ZipFile(p)
+          i=z.getinfo('resources.arsc')
+          ho=i.header_offset
+          fnlen=struct.unpack_from('<H',raw,ho+26)[0]
+          exlen=struct.unpack_from('<H',raw,ho+28)[0]
+          off=ho+30+fnlen+exlen
+          print(f'resources.arsc ctype={i.compress_type} dataoff={off} mod4={off%4}')
+          assert i.compress_type==0 and off%4==0, 'NOT aligned'
+          print('ALIGNMENT OK')
+          PY
+
+          echo "path=android/$OUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
