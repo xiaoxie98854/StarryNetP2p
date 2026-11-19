@@ -1,0 +1,45 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'top.starrynet.mobile'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'top.starrynet.mobile'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    signingConfigs {
+        // 可选正式签名：CI 若注入 KEYSTORE_* 环境变量就用它，否则回退 debug 签名。
+        // fallback 必须是「不存在的文件」，不能是空串（file('') 指向项目根目录，
+        // exists() 会返回 true，导致拿目录当 keystore 签名而失败）。
+        release {
+            storeFile file(System.getenv('KEYSTORE_FILE') ?: 'nonexistent.jks')
+            storePassword System.getenv('KEYSTORE_PASS') ?: ''
+            keyAlias System.getenv('KEYSTORE_ALIAS') ?: ''
+            keyPassword System.getenv('KEY_PASS') ?: ''
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            signingConfig file(System.getenv('KEYSTORE_FILE') ?: 'nonexistent.jks').exists()
+                    ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 零第三方依赖：网络用 HttpURLConnection，UI 用系统控件，
+// Gradle 只需拉 AGP 本身，云端构建快。
+dependencies {
+}

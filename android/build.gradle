@@ -1,0 +1,22 @@
+// 顶层构建文件。仓库里只放 Gradle 配置，不含 wrapper（体积大、易漏 jar）。
+// 云端 Actions 用 setup-java + setup-gradle 提供 JDK 17 与 Gradle，本地 Android Studio 也能直接打开。
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.5.2'
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+task clean(type: Delete) {
+    delete rootProject.buildDir
+}
