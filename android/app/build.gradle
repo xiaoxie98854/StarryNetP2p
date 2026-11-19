@@ -12,14 +12,28 @@ android {
         versionName '1.0.0'
     }
 
-    // 签名不在 AGP 内做：改由 CI 流水线先 zipalign（4 字节对齐）再 apksigner 签名。
-    // AGP 8.5 默认产出的 APK 里 resources.arsc 未对齐，Android 11+ 会直接拒装
-    // （INSTALL_FAILED_INVALID_APK /「系统内部问题导致安装失败」）。
-    // 先对齐后签名是 Android 官方要求，顺序不能反。
+    signingConfigs {
+        // 内测固定签名：密钥随仓库保存，保证每次编译签名一致，
+        // 用户后续更新能直接覆盖安装（不会因为签名不同被系统拒绝）。
+        release {
+            storeFile file('starrynet-release.jks')
+            storePassword 'starrynet123'
+            keyAlias 'starrynet'
+            keyPassword 'starrynet123'
+            // 国产 ROM（荣耀/MagicOS、MIUI 等）对纯 v3 签名兼容性差，
+            // 常报「系统内部问题导致安装失败」。强制 v1+v2、关闭 v3 以最大兼容。
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing false
+            enableV4Signing false
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             shrinkResources false
+            signingConfig signingConfigs.release
         }
     }
 
