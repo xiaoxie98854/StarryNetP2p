@@ -1,6 +1,4 @@
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 android {
     namespace 'top.starrynet.mobile'
@@ -15,14 +13,14 @@ android {
     }
 
     signingConfigs {
-        // 可选正式签名：CI 若注入 KEYSTORE_* 环境变量就用它，否则回退 debug 签名。
-        // fallback 必须是「不存在的文件」，不能是空串（file('') 指向项目根目录，
-        // exists() 会返回 true，导致拿目录当 keystore 签名而失败）。
+        // 内测固定签名：密钥随仓库保存，保证每次编译签名一致，
+        // 用户后续更新能直接覆盖安装（不会因为签名不同被系统拒绝）。
+        // 这是自签内测密钥，不是 Play 上架密钥。
         release {
-            storeFile file(System.getenv('KEYSTORE_FILE') ?: 'nonexistent.jks')
-            storePassword System.getenv('KEYSTORE_PASS') ?: ''
-            keyAlias System.getenv('KEYSTORE_ALIAS') ?: ''
-            keyPassword System.getenv('KEY_PASS') ?: ''
+            storeFile file('starrynet-release.jks')
+            storePassword 'starrynet123'
+            keyAlias 'starrynet'
+            keyPassword 'starrynet123'
         }
     }
 
@@ -30,8 +28,7 @@ android {
         release {
             minifyEnabled false
             shrinkResources false
-            signingConfig file(System.getenv('KEYSTORE_FILE') ?: 'nonexistent.jks').exists()
-                    ? signingConfigs.release : signingConfigs.debug
+            signingConfig signingConfigs.release
         }
     }
 
@@ -41,7 +38,6 @@ android {
     }
 }
 
-// 零第三方依赖：网络用 HttpURLConnection，UI 用系统控件，
-// Gradle 只需拉 AGP 本身，云端构建快。
+// 零第三方依赖：网络用 HttpURLConnection，UI 用系统控件。
 dependencies {
 }
