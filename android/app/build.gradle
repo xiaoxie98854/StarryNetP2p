@@ -12,11 +12,25 @@ android {
         versionName '1.0.0'
     }
 
-    // 签名统一交给 CI 的 apksigner（v1+v2），这里不签名，产出 unsigned APK。
+    signingConfigs {
+        release {
+            storeFile file('starrynet-release.jks')
+            storePassword 'starrynet123'
+            keyAlias 'starrynet'
+            keyPassword 'starrynet123'
+            // v1+v2+v3 全开，最大兼容国产 ROM 与新旧系统
+            enableV1Signing true
+            enableV2Signing true
+            enableV3Signing true
+            enableV4Signing false
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             shrinkResources false
+            signingConfig signingConfigs.release
         }
     }
 
