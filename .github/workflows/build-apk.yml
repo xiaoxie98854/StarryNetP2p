@@ -22,25 +22,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
-
-      # 隧道程序：frp 是纯 Go 项目，交叉编译成 linux/arm64 静态二进制即可在
-      # Android(arm64) 上直接执行。命名成 libfrpc.so + 放进 jniLibs，安装后会被
-      # 解压到 nativeLibraryDir —— Android 10+ 里唯一允许 exec 的目录。
-      # 版本必须与桌面端 client/frpc/frpc.exe (0.72.0) 和服务端 frps 保持一致。
-      - name: Build frpc for Android arm64
+      # 隧道程序：直接用 frp 官方发布的 **android_arm64** 预编译包。
+      # 官方自 0.6x 起就提供 Android 目标，用 NDK 交叉编译，比通用 linux/arm64
+      # 更贴合 Android 的 bionic libc 与 syscall 白名单，避免被 seccomp 拦截。
+      #
+      # 命名成 libfrpc.so + 放进 jniLibs，安装后会被解压到 nativeLibraryDir
+      # —— Android 10+ 里唯一允许 exec 的目录（应用数据目录已禁执行）。
+      #
+      # 不从源码 go build：frp 0.6x 起 frpc 内嵌 Web UI，源码缺 web/frpc/dist
+      # 前端产物会直接编译失败，官方包已经带好了。
+      # 版本必须与桌面端 client/frpc/frpc.exe (0.72.0) 及服务端 frps 对齐。
+      - name: Fetch frpc for Android arm64
         working-directory: /tmp
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v0.72.0 https://github.com/fatedier/frp.git frp-src
-          cd frp-src
+          VER=0.72.0
+          URL="https://github.com/fatedier/frp/releases/download/v${VER}/frp_${VER}_android_arm64.tar.gz"
+          curl -fsSL --retry 3 -o frp.tar.gz "$URL"
+          tar -xzf frp.tar.gz
           OUT="$GITHUB_WORKSPACE/android/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$OUT"
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -trimpath -ldflags "-s -w" -o "$OUT/libfrpc.so" ./cmd/frpc
+          cp "frp_${VER}_android_arm64/frpc" "$OUT/libfrpc.so"
+          chmod +x "$OUT/libfrpc.so"
           ls -lh "$OUT/libfrpc.so"
           file "$OUT/libfrpc.so"
 
