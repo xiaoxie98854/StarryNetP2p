@@ -8,8 +8,10 @@ android {
         applicationId 'top.starrynet.mobile'
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName '1.0.0'
+        // 1.1.0 起内置 frpc 隧道，手机端可以自己开房。
+        // versionCode 必须比 1.0.0 大，已装旧版的用户才能直接覆盖安装、不丢登录状态。
+        versionCode 2
+        versionName '1.1.0'
     }
 
     signingConfigs {

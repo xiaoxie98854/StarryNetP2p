@@ -28,7 +28,7 @@ import android.widget.Toast;
  */
 public class MainActivity extends Activity {
 
-    private static final String APP_VERSION = "1.0.0";
+    private static final String APP_VERSION = "1.1.0";
 
     private final Api api = new Api();
     private Prefs prefs;
