@@ -1,6 +1,5 @@
 name: Build StarryNet Android APK
 
-# 手动触发：在 Actions 页面点 Run workflow。代码推上去后也可自动触发。
 on:
   workflow_dispatch:
   push:
@@ -30,15 +29,18 @@ jobs:
       - name: Build unsigned release APK
         run: gradle assembleRelease --no-daemon --stacktrace
 
-      # 关键：AGP 8.5 默认产出的 APK 里 resources.arsc 未做 4 字节对齐，
-      # Android 11+ 会直接拒装（INSTALL_FAILED_INVALID_APK）。
-      # 这里显式「先 zipalign 对齐 → 再 apksigner 签名」，顺序不能反。
+      # AGP 8.5 产出的 APK 里 resources.arsc 未做 4 字节对齐，Android 11+ 会拒装。
+      # 正确顺序：先 zipalign 对齐未签名包 → 再 apksigner 签名 → verify 校验。
+      # build-tools 37 的 apksigner 会丢掉对齐 padding，这里固定用 35.0.0（稳定版）。
       - name: Zipalign + Sign + Verify
         id: apk
         run: |
           set -euo pipefail
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          BT=$(find "$SDK/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+          BT="$SDK/build-tools/35.0.0"
+          if [ ! -x "$BT/apksigner" ]; then
+            BT=$(find "$SDK/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | head -1)
+          fi
           echo "build-tools: $BT"
 
           UN=$(find app/build/outputs/apk/release -name '*-unsigned.apk' | head -1)
@@ -53,12 +55,14 @@ jobs:
           echo "== zipalign (4-byte align) =="
           "$BT/zipalign" -p -f -v 4 "$UN" app/build/outputs/apk/release/aligned.apk
 
-          echo "== apksigner (v1 + v2 + v3) =="
+          echo "== apksigner (v2 + v3; v1 off to preserve alignment) =="
+          # v1 签名会往 ZIP 里插 META-INF 条目，破坏 zipalign 的对齐；
+          # minSdk 24 已支持 v2 签名，故关闭 v1，只用 v2+v3。
           "$BT/apksigner" sign \
             --ks app/starrynet-release.jks \
             --ks-pass pass:starrynet123 \
             --key-pass pass:starrynet123 \
-            --v1-signing-enabled true \
+            --v1-signing-enabled false \
             --v2-signing-enabled true \
             --v3-signing-enabled true \
             --out "$OUT" \
@@ -74,13 +78,20 @@ jobs:
           z=zipfile.ZipFile(p)
           i=z.getinfo('resources.arsc')
           off=i.header_offset+30+len(i.filename.encode())+len(i.extra)
-          ctype='STORED' if i.compress_type==0 else 'DEFLATE'
-          print(f'resources.arsc {ctype} offset={off} mod4={off%4}')
+          print(f'resources.arsc {"STORED" if i.compress_type==0 else "DEFLATE"} offset={off} mod4={off%4} extra={len(i.extra)}')
           assert i.compress_type==0 and off%4==0, 'resources.arsc NOT aligned!'
           print('ALIGNMENT OK')
           PY
 
           echo "path=android/$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: StarryNet-Android-DEBUG
+          path: android/app/build/outputs/apk/release/*.apk
+          retention-days: 7
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
